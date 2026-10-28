@@ -1,0 +1,37 @@
+{
+  "args": {
+    "restaurants": null,
+    "neighborhoods": null,
+    "kaggle": null,
+    "city_seed": 0,
+    "stations": 15,
+    "batteries": 150,
+    "riders": 400,
+    "orders_per_day": 8000,
+    "train_seeds": 6,
+    "holdout_seeds": 8,
+    "iters": 25,
+    "sa_evals": 100,
+    "z": 1.0,
+    "policy": "nearest",
+    "candidate_km": 0.4,
+    "out": "out/optimize"
+  },
+  "provenance": {
+    "zones": "synthetic",
+    "restaurants": "synthetic",
+    "terrain": "synthetic",
+    "cuisine_prior": "Kaggle counts (deck)"
+  },
+  "train_evals": 129,
+  "start": "pilot k-means",
+  "paired_vs_uniform": {
+    "best": "simulated annealing",
+    "mean_diff": -1091.1001669386724,
+    "se_diff": 68.25981181535184,
+    "seeds_better": 8,
+    "n_seeds": 8
+  },
+  "iterative_seconds": 90.09151768684387,
+  "sa_seconds": 363.6922016143799
+}

@@ -1,0 +1,15 @@
+[project]
+name = "ebike-swap"
+version = "0.1.0"
+description = "Modular agent-based simulator and simulation-based optimisation for NYC e-bike battery swapping"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pandas", "matplotlib"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["ebike_swap", "ebike_swap.data"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

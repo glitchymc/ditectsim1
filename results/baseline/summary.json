@@ -1,0 +1,19 @@
+{
+  "orders": 9462,
+  "delivered": 9462,
+  "cancel_rate": 0.0,
+  "undelivered_rate": 0.0,
+  "mean_delivery_min": 33.004423501854156,
+  "p90_delivery_min": 39.87034771319613,
+  "late_rate": 0.007292327203551046,
+  "mean_assign_wait_min": 5.285181916333631,
+  "swaps": 1063,
+  "swap_hours": 1384.8313066147373,
+  "mean_swap_downtime_min": 78.16545474777445,
+  "mean_station_wait_min": 73.1776199469508,
+  "p95_station_wait_min": 393.9408252214827,
+  "station_max_queue": 75,
+  "idle_stations": 0,
+  "stranded_events": 0,
+  "swap_threshold": 0.3127714864617781
+}
