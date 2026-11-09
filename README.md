@@ -26,7 +26,7 @@ OD Generator ──► Dispatch Model ◄──► Rider list ◄──► Stati
 
 ```bash
 pip install numpy pandas matplotlib pytest
-python -m pytest -q                                   # 9 tests
+python -m pytest -q                                   # 16 tests
 python scripts/run_baseline.py --gif                  # one day, uniform layout -> out/baseline/ (example outputs committed under results/baseline/)
 python scripts/optimize_stations.py                   # full optimization -> out/optimize/ (results below are committed under results/optimize/)
 python scripts/optimize_stations.py --policy least_time   # riders who avoid queues
@@ -130,6 +130,93 @@ rider-hour equivalents:
 * In this scenario, battery supply is the binding constraint, not location: queues stay at about 20
   minutes even in the best layouts. Sweeping `--batteries` next would trace the inventory-versus-wait
   trade-off.
+
+## Integrated frontend + backend simulator (`ebike_swap/integrated/`)
+
+This follows the *E-bike Delivery Frontend / Backend Flowchart*. The station-only model above charges
+packs inside each station. This one moves charging to a central charging station (CCS) and trucks the
+packs both ways. Packs are individual objects here, each with an ID, charge, health and cycle count, so
+the model can follow every pack through the system.
+
+```
+Platform 1..n ─► OD generator ─► platform dispatch ─► offer on rider's phone ─► accept? ─► batched job queue
+ (own demand)                    (own algorithm)       (multi-app riders)        (route/pay)   [P1 order, P2 order]
+                                                                                                  │ pickup → drop-off
+                                                                     battery < threshold? ◄───────┘
+                                                                          │ yes (after finishing tasks)
+                                    BSS: wait in queue → swap ◄───────────┘
+                                     │ depleted                        ▲ charged
+                                   truck                             truck
+                                     ▼                                 │
+CCS: unloading buffer → testing (discard) → van → charging hall (CC → CV) → van → loading buffer
+```
+
+| Flowchart box | Code | Notes |
+|---|---|---|
+| Platform 1..n, OD generator | `config.PlatformSpec`, `model.generate_jobs` | Each platform has its own order volume and random stream, reusing the time / demographics / cuisine OD generator |
+| Platform dispatch (independent algorithm) | `frontend.NearestIdle`, `frontend.Batching` | P1 and P3 offer to the nearest idle rider. P2 also offers to busy riders when the stacked order adds at most 1.5 km |
+| Incoming offers → rider agent (multi-app) | `model.send_offer`, `model._decide` | About 60% of riders are logged into 2 or 3 apps and can hold offers from several platforms at once |
+| Accept? route / pay | `model._decide` | Logit on pay minus the rider's value of the added time. The rider also declines any job it can't finish with enough charge left to reach a BSS. A declined order is re-offered after the platform's refresh time |
+| Batched active job queue | `frontend.best_insertion` | Up to 2 orders. Cheapest insertion of pickup and drop-off; the stop the rider is already heading to stays first |
+| Battery depletes (distance, elevation, …) | `geo.GridRouter` | Same energy model as before |
+| Battery < threshold? | `model._arrive` | No: keep working. Yes: finish current tasks, take no new offers, then go to a BSS |
+| EV arrival at BSS (queue → swap) | `model._at_bss`, `backend.BSS` | The rider's app shows which stations have packs (`bss_choice="avoid_empty"`), limited to stations in range |
+| Truck dispatching | `backend.Fleet` | Options 1, 2a, 2b and 2c below |
+| Unloading buffer → testing → discard | `backend.CCS` | Discard if state of health < 0.80 or on a random defect (0.5%). Discards are replaced by new packs |
+| Van, charging (CC then CV) | `backend.CCS`, `battery.charge_minutes` | The flowchart labels both charging boxes "Phase One: Constant Current". This reads them as CC followed by CV: constant current to 80%, then a voltage phase whose current tapers to 1 A |
+| Loading buffer | `backend.CCS.loading` | Hub trucks load here. Dedicated trucks waiting under the "wait" rule are released as packs arrive |
+
+**Truck options** (`TruckParams`):
+* **1 (`mode="hub"`):** trucks wait at the CCS. A BSS calls one when its depleted count reaches
+  `threshold`. A station that has run out of packs while riders wait also calls one, because otherwise it
+  can never recover.
+* **2 (`mode="dedicated"`):** one truck per BSS, leaving on **2a** a Poisson clock
+  (`departure="poisson"`) or **2b** a fixed schedule (`departure="schedule"`). At the CCS it follows **2c**:
+  return immediately with whatever is charged (`return_policy="immediate"`), or wait for enough packs
+  (`"wait"`, capped at `max_wait_min`).
+
+**Parameters row of the flowchart → config:**
+
+| Flowchart parameter | Config field |
+|---|---|
+| Arrival rate per platform | `PlatformSpec.orders_per_day` |
+| Refresh / loading time | `PlatformSpec.refresh_min` |
+| Battery usage | `EnergyParams` |
+| BSS capacity | `BSSParams.slots` |
+| Transit time, truck capacity | `TruckParams.speed_kmh`, `TruckParams.capacity` |
+| Threshold | `TruckParams.threshold` |
+| Stochastic process and schedule | `mean_headway_min`, `schedule_every_min` |
+| Van capacity and transit time | `CCSParams.van_capacity`, `CCSParams.van_transit_min` |
+| Type of charger, charging current | `ChargerParams.kind`, `ChargerParams.current_a` |
+
+```bash
+python scripts/run_integrated.py --gif                          # one day -> out/integrated/
+python scripts/run_integrated.py --truck-mode dedicated --departure poisson --return-policy wait
+python scripts/compare_logistics.py --seeds 4                   # all truck options, same demand
+```
+
+### Truck options compared (synthetic city, 4 seeds, same demand per seed)
+
+Setup: 10 BSS with 22 slots each, 3 platforms with about 9.6k orders/day in total, 400 riders, a CCS in
+Long Island City with 80 standard chargers and 250 spare packs. Option 1 has 6 trucks; option 2 has one
+per station (10). Each truck carries 30 packs.
+
+| Scenario | Mean swap wait | p95 swap wait | Station stockout | Truck km/day |
+|---|---|---|---|---|
+| 1 hub, threshold 8 | 3.5 min | 25 min | 8% | 1,074 |
+| 2b dedicated, every 2 h, immediate | 10.2 min | 70 min | 14% | 1,741 |
+| 2b dedicated, every 2 h, wait | 11.6 min | 84 min | 14% | 1,622 |
+| 2a dedicated, Poisson (mean 2 h), immediate | 44.2 min | 232 min | 28% | 1,410 |
+| 2a dedicated, Poisson, wait | 44.3 min | 234 min | 28% | 1,418 |
+
+* Calling a truck when a station needs it beats a fixed clock, with 4 fewer trucks and 38% fewer truck km than scheduled dedicated trucks (2b).
+* A Poisson clock with the same average headway is much worse than a fixed schedule: the long random gaps
+  are when stations run dry.
+* "Wait for charged packs" doesn't help here, because the loading buffer is rarely the bottleneck.
+* At the dinner peak all 80 chargers are busy (see `results/integrated/inventory.png`). Charger count and
+  charge rate are the next things to vary (`--charger fast`).
+
+These are synthetic-city numbers that show the model works, not findings about NYC.
 
 ## Extending: the other research topics
 
